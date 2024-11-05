@@ -1,198 +1,71 @@
-from dwave.system.samplers import DWaveSampler
-from helpers.draw import plot_schedule
-from dwave.system import TilingComposite, FixedEmbeddingComposite
-from helpers.draw import plot_success_fraction
-import matplotlib.pyplot as plt
-import pandas as pd
-import json
 import numpy as np
+from dwave.system import DWaveSampler, EmbeddingComposite
+from dimod import BinaryQuadraticModel
 
+# Define parameters
+n = 3  # Number of airspaces
+m = 5  # Number of time steps
+c = np.array([15] + [1 for _ in range(1, n)])  # Capacities for each airspace
+u0 = np.array([1] + [0 for _ in range(1, m)])  # Initial aircraft entering at airspace 0
 
-sampler = DWaveSampler()
-print("Connected to sampler", sampler.solver.name)
-print("Maximum anneal schedule points: {}".format(sampler.properties["max_anneal_schedule_points"]))
+# Helper function to create the QUBO problem
+def create_qubo_problem(n, m, c, u0):
+    # Initialize the QUBO dictionary
+    Q = {}
 
-annealing_range = sampler.properties["annealing_time_range"]
-max_slope = 1.0 / annealing_range[0]
-print("Annealing time range: {}".format(sampler.properties["annealing_time_range"]))
-print("Maximum slope:", max_slope)
+    # Iterate through each time step and airspace to create constraints
+    for t in range(m):
+        for i in range(n):
+            # Define variable indices for u and x
+            u_index = f'u_{i}_{t}'
+            x_index = f'x_{i}_{t}'
 
-# Print the full anneal schedule
-schedule = [[0.0, 0.0], [50.0, 0.5], [250.0, 0.5], [300, 1.0]]
-print("Schedule: %s" % schedule)
+            # Add capacity constraints as quadratic penalties
+            if i == 0:
+                # Initial condition constraint for x_0
+                Q[(x_index, x_index)] = 1 - u0[t] ** 2  # Numerical coefficient, not a tuple
+            else:
+                # Add quadratic terms and cross terms for capacity and coupling
+                Q[(u_index, u_index)] = Q.get((u_index, u_index), 0) + c[i] ** 2  # Real number
+                Q[(x_index, x_index)] = Q.get((x_index, x_index), 0) + c[i] ** 2  # Real number
+                Q[(x_index, u_index)] = Q.get((x_index, u_index), 0) - 2 * c[i]   # Real number
 
-# Plot the anneal schedule
-plot_schedule(schedule, "Example Anneal Schedule with Pause")
+    return Q
 
-schedule = [[0.0, 0.0], [12.0, 0.6], [12.8, 1.0]]
-print("Schedule: %s" % schedule)
+# Create the QUBO problem
+qubo = create_qubo_problem(n, m, c, u0)
 
-plot_schedule(schedule, "Example Anneal Schedule with Quench")
+# Use D-Wave's sampler
+sampler = EmbeddingComposite(DWaveSampler())
 
-schedule=[[0.0, 0.0], [40.0, 0.4], [90.0, 0.4], [91.2, 1.0]]
-print("Schedule: %s" % schedule)
+# Solve the problem using the quantum annealer
+response = sampler.sample_qubo(qubo, num_reads=100)
 
-plot_schedule(schedule, "Example Anneal Schedule with Pause and Quench")
+# Extract the best solution
+best_solution = response.first.sample
+energy = response.first.energy
 
-h = {0: 1.0, 1: -1.0, 2: -1.0, 3: 1.0, 4: 1.0, 5: -1.0, 6: 0.0, 7: 1.0,
-     8: 1.0, 9: -1.0, 10: -1.0, 11: 1.0, 12: 1.0, 13: 0.0, 14: -1.0, 15: 1.0}
-J = {(9, 13): -1, (2, 6): -1, (8, 13): -1, (9, 14): -1, (9, 15): -1,
-     (10, 13): -1, (5, 13): -1, (10, 12): -1, (1, 5): -1, (10, 14): -1,
-     (0, 5): -1, (1, 6): -1, (3, 6): -1, (1, 7): -1, (11, 14): -1,
-     (2, 5): -1, (2, 4): -1, (6, 14): -1}
+# Initialize arrays to store u_i(t) and x_i(t)
+u = np.zeros((n, m + 1))
+x = np.zeros((n, m + 1))
 
+# Populate the arrays based on the solution
+for i in range(n):
+    for t in range(m + 1):
+        u_var = f'u_{i}_{t}'
+        x_var = f'x_{i}_{t}'
+        if u_var in best_solution:
+            u[i, t] = best_solution[u_var]
+        if x_var in best_solution:
+            x[i, t] = best_solution[x_var]
 
-tiled_sampler = TilingComposite(sampler, 1, 2, 4)
+# Print the results
+print("Optimal delay schedule u_i(t):")
+for i in range(n):
+    print(f"Airspace {i}: {u[i]}")
 
-if tiled_sampler.num_tiles:
-    sampler_embedded = FixedEmbeddingComposite(sampler, embedding=tiled_sampler.embeddings[0])
-else:
-    print("Unable to find two complete unit cells in QPU {}".format(sampler.solver.name))
+print("\nNumber of aircraft in each airspace x_i(t):")
+for i in range(n):
+    print(f"Airspace {i}: {x[i]}")
 
-runs = 1000
-results = sampler_embedded.sample_ising(h, J,
-                                        num_reads=runs,
-                                        answer_mode='raw',
-                                        label='Notebook - Anneal Schedule',
-                                        annealing_time=100)
-
-print("QPU time used:", results.info['timing']['qpu_access_time'], "microseconds.")
-
-
-plt.hist(results.record.energy,rwidth=1,align='left',bins=[-21,-20,-19,-18,-17,-16,-15])
-plt.show()
-
-
-_, counts = np.unique(results.record.energy.reshape(1000,1), axis=0, return_counts=True)
-print("Ground state probability: ", counts[0]/runs)
-
-with open("files/saved_pause_results.json", "r") as read_file:
-    saved_pause_success_prob = pd.read_json(read_file)
-
-
-pause_plot = plot_success_fraction(saved_pause_success_prob,
-                      "Success Fraction Using Pause for a Range of Anneal-Schedule Parameters",
-                      "pause_duration")
-
-#Update the standard anneal schedule parameters below:
-
-anneal_time = 20.0
-pause_duration = 20.0      # Must be greater than 0
-pause_start = 0.3        # Must be between 0 and 1
-
-#----------------------------------------------------------------
-#Leave the code below to run the problem and display the results.
-#----------------------------------------------------------------
-schedule=[[0.0,0.0],[pause_start*anneal_time,pause_start],[pause_start*anneal_time+pause_duration, pause_start],[anneal_time+pause_duration, 1.0]]
-runs=1000
-results = sampler_embedded.sample_ising(h, J,
-                anneal_schedule=schedule,
-                num_reads=runs,
-                answer_mode='raw',
-                label='Notebook - Anneal Schedule')
-success = np.count_nonzero(results.record.energy == -20.0)/runs
-print("Success probability: ",success)
-
-pause_plot["axis"].scatter([pause_start],[success], color="red", s=100)
-pause_plot["figure"]
-
-with open("files/saved_quench_results.json", "r") as read_file:
-    saved_quench_success_prob = pd.read_json(read_file).replace(0, np.nan)
-
-quench_plot = plot_success_fraction(saved_quench_success_prob,
-                                    "Success Fraction Using Quench for a Range of Anneal-Schedule Parameters",
-                                    "quench_slope")
-
-#Update the standard anneal schedule parameters below
-
-anneal_time = 50.0
-quench_slope = 1.0      # Must be greater than 0
-quench_start = 0.45      # Must be between 0 and 1
-
-#----------------------------------------------------------------
-#Leave the code below to run the problem and display the results.
-#----------------------------------------------------------------
-schedule=[[0.0,0.0],[quench_start*anneal_time,quench_start],[(1-quench_start+quench_slope*quench_start*anneal_time)/quench_slope, 1.0]]
-runs=1000
-results = sampler_embedded.sample_ising(h, J,
-                anneal_schedule=schedule,
-                num_reads=runs,
-                answer_mode='raw',
-                label='Notebook - Anneal Schedule')
-success = np.count_nonzero(results.record.energy == -20.0)/runs
-print("Success probability: ",success)
-
-quench_plot["axis"].scatter([quench_start],[success], color="red", s=100)
-quench_plot["figure"]
-
-anneal_time = [10.0, 100.0, 300.0]
-pause_duration = [10.0, 100.0, 300.0]
-
-# Create list of start times
-num_points = 5
-s_low = 0.2
-s_high = 0.6
-pause_start = np.linspace(s_low, s_high, num=num_points)
-
-success_prob = pd.DataFrame(index=range(len(anneal_time) * len(pause_duration) * len(pause_start)),
-                            columns=["anneal_time", "pause_duration", "s_feature", "success_frac"],
-                            data=None)
-counter = 0
-
-print("Starting QPU calls...")
-QPU_time = 0.0
-for anneal in anneal_time:
-    for pause in pause_duration:
-        for start in pause_start:
-            schedule = [[0.0, 0.0], [start * anneal, start], [start * anneal + pause, start], [anneal + pause, 1.0]]
-            runs = 1000
-            results = sampler_embedded.sample_ising(h, J,
-                                                    anneal_schedule=schedule,
-                                                    num_reads=runs,
-                                                    answer_mode='raw',
-                                                    label='Notebook - Anneal Schedule')
-            success_prob.iloc[counter] = {"anneal_time": anneal,
-                                          "pause_duration": pause,
-                                          "s_feature": start,
-                                          "success_frac": np.count_nonzero(results.record.energy == -20.0) / runs}
-            counter += 1
-            QPU_time += results.info['timing']['qpu_access_time']
-        print("QPU calls remaining: ", len(anneal_time) * len(pause_duration) * len(pause_start) - counter)
-
-print("QPU calls complete using", QPU_time / 1000000.0, "seconds of QPU time.")
-
-anneal_time = [10.0, 100.0, 300.0]
-quench_slopes = [1.0, 0.5, 0.25]
-
-# start times
-num_points = 5
-s_low = 0.2
-s_high = 0.9
-quench_start = np.linspace(s_low, s_high, num=num_points)
-
-success_prob = pd.DataFrame(index=range(len(anneal_time) * len(quench_slopes) * len(quench_start)),
-                            columns=["anneal_time", "quench_slope", "s_feature", "success_frac"],
-                            data=None)
-counter = 0
-
-print("Starting QPU calls...")
-QPU_time = 0.0
-for anneal in anneal_time:
-    for quench in quench_slopes:
-        for start in quench_start:
-            schedule = [[0.0, 0.0], [start * anneal, start], [(1 - start + quench * start * anneal) / quench, 1.0]]
-            runs = 1000
-            results = sampler_embedded.sample_ising(h, J,
-                                                    anneal_schedule=schedule,
-                                                    num_reads=runs,
-                                                    answer_mode='raw',
-                                                    label='Notebook - Anneal Schedule')
-            success_prob.iloc[counter] = {"anneal_time": anneal,
-                                          "quench_slope": quench,
-                                          "s_feature": start,
-                                          "success_frac": np.count_nonzero(results.record.energy == -20.0) / runs}
-            counter += 1
-            QPU_time += results.info['timing']['qpu_access_time']
-        print("QPU calls remaining: ", len(anneal_time) * len(quench_slopes) * len(quench_start) - counter)
-
-print("QPU calls complete using", QPU_time / 1000000.0, "seconds of QPU time.")
+print("\nEnergy of the solution:", energy)
