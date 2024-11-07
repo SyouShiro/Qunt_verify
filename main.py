@@ -1,71 +1,71 @@
 import numpy as np
-from dwave.system import DWaveSampler, EmbeddingComposite
-from dimod import BinaryQuadraticModel
+from dwave.system import LeapHybridCQMSampler
+import dimod
 
-# Define parameters
+# Parameters
 n = 3  # Number of airspaces
-m = 5  # Number of time steps
-c = np.array([15] + [1 for _ in range(1, n)])  # Capacities for each airspace
-u0 = np.array([1] + [0 for _ in range(1, m)])  # Initial aircraft entering at airspace 0
+m = 10  # Number of time steps
+c = np.array([1 for _ in range(n)])  # Capacities c_i for i = 1 to n
+c[0] = 15
+u0 = np.array([0 for _ in range(m)])  # Aircraft entering at airspace x_0 for t = 0 to m-1
+u0[0] = 5
 
-# Helper function to create the QUBO problem
-def create_qubo_problem(n, m, c, u0):
-    # Initialize the QUBO dictionary
-    Q = {}
+# Initialize the Constrained Quadratic Model (CQM)
+cqm = dimod.ConstrainedQuadraticModel()
 
-    # Iterate through each time step and airspace to create constraints
-    for t in range(m):
-        for i in range(n):
-            # Define variable indices for u and x
-            u_index = f'u_{i}_{t}'
-            x_index = f'x_{i}_{t}'
+# Define decision variables for aircraft delay schedule and airspace occupancy
+u = [[dimod.Integer(f'u_{i}_{t}', upper_bound=c[i]) for t in range(m + 1)] for i in range(n)]
+x = [[dimod.Integer(f'x_{i}_{t}', upper_bound=c[i]) for t in range(m + 1)] for i in range(n)]
 
-            # Add capacity constraints as quadratic penalties
-            if i == 0:
-                # Initial condition constraint for x_0
-                Q[(x_index, x_index)] = 1 - u0[t] ** 2  # Numerical coefficient, not a tuple
-            else:
-                # Add quadratic terms and cross terms for capacity and coupling
-                Q[(u_index, u_index)] = Q.get((u_index, u_index), 0) + c[i] ** 2  # Real number
-                Q[(x_index, x_index)] = Q.get((x_index, x_index), 0) + c[i] ** 2  # Real number
-                Q[(x_index, u_index)] = Q.get((x_index, u_index), 0) - 2 * c[i]   # Real number
-
-    return Q
-
-# Create the QUBO problem
-qubo = create_qubo_problem(n, m, c, u0)
-
-# Use D-Wave's sampler
-sampler = EmbeddingComposite(DWaveSampler())
-
-# Solve the problem using the quantum annealer
-response = sampler.sample_qubo(qubo, num_reads=100)
-
-# Extract the best solution
-best_solution = response.first.sample
-energy = response.first.energy
-
-# Initialize arrays to store u_i(t) and x_i(t)
-u = np.zeros((n, m + 1))
-x = np.zeros((n, m + 1))
-
-# Populate the arrays based on the solution
+# Initial conditions: x_i(0) = 0 for all i >= 1
 for i in range(n):
-    for t in range(m + 1):
-        u_var = f'u_{i}_{t}'
-        x_var = f'x_{i}_{t}'
-        if u_var in best_solution:
-            u[i, t] = best_solution[u_var]
-        if x_var in best_solution:
-            x[i, t] = best_solution[x_var]
+    cqm.add_constraint(x[i][0] == 0, label=f"initial_condition_airspace_{i}")
 
-# Print the results
-print("Optimal delay schedule u_i(t):")
-for i in range(n):
-    print(f"Airspace {i}: {u[i]}")
+# Dynamics and capacity constraints
+for t in range(m):
+    for i in range(n):
+        # Determine previous values based on index
+        if i == 0:
+            u_prev = 0
+            x_prev = u0[t]
+        else:
+            x_prev = x[i - 1][t]
+            u_prev = u[i - 1][t]
 
-print("\nNumber of aircraft in each airspace x_i(t):")
-for i in range(n):
-    print(f"Airspace {i}: {x[i]}")
+        # Dynamic constraint: number of aircraft in each airspace at next time step
+        cqm.add_constraint((x[i][t + 1] - x_prev - u[i][t] + u_prev) == 0,
+                           label=f"dynamics_constraint_{i}_{t}")
 
-print("\nEnergy of the solution:", energy)
+        # Capacity constraints for aircraft in the airspace
+        cqm.add_constraint(x[i][t] <= c[i], label=f"capacity_constraint_x_{i}_{t}")
+        cqm.add_constraint(u[i][t] <= c[i], label=f"capacity_constraint_u_{i}_{t}")
+
+        # Stay constraint reformulated as x[i][t] - u[i][t] >= 0
+        cqm.add_constraint(x[i][t] - u[i][t] >= 0, label=f"stay_constraint_{i}_{t}")
+
+        # Non-negativity constraints reformulated
+        cqm.add_constraint(u[i][t] >= 0, label=f"nonnegativity_u_{i}_{t}")
+        cqm.add_constraint(x[i][t] >= 0, label=f"nonnegativity_x_{i}_{t}")
+
+# Objective function: Minimize the total number of aircraft in the system
+objective = sum(x[i][t] for i in range(n) for t in range(m + 1))
+cqm.set_objective(objective)
+
+# Solve the problem using D-Wave's hybrid CQM solver
+sampler = LeapHybridCQMSampler()
+sampleset = sampler.sample_cqm(cqm, time_limit=5)
+
+# Check if the solution is feasible
+feasible_sampleset = sampleset.filter(lambda row: row.is_feasible)
+if feasible_sampleset:
+    sample = feasible_sampleset.first.sample
+    print("Optimal solution found.")
+    print("\nOptimal delay schedule u_i(t):")
+    for i in range(n):
+        print(f"Airspace {i}: {[sample.get(f'u_{i}_{t}', 0) for t in range(m + 1)]}")
+
+    print("\nNumber of aircraft in each airspace x_i(t):")
+    for i in range(n):
+        print(f"Airspace {i}: {[sample.get(f'x_{i}_{t}', 0) for t in range(m + 1)]}")
+else:
+    print("No feasible solution found.")

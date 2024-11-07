@@ -16,9 +16,6 @@ x = cp.Variable((n, m + 1), integer=True)
 # Constraints
 constraints = []
 
-# Initial conditions: x_i(0) = 0 for all i >= 1
-constraints.append(x[:, 0] == 0)
-
 # Dynamics and capacity constraints
 for t in range(m):
     for i in range(n):
