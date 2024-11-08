@@ -62,10 +62,10 @@ if feasible_sampleset:
     print("Optimal solution found.")
     print("\nOptimal delay schedule u_i(t):")
     for i in range(n):
-        print(f"Airspace {i}: {[sample.get(f'u_{i}_{t}', 0) for t in range(m + 1)]}")
+        print(f"Airspace {i}: {[int(sample.get(f'u_{i}_{t}', 0)) for t in range(m + 1)]}")
 
     print("\nNumber of aircraft in each airspace x_i(t):")
     for i in range(n):
-        print(f"Airspace {i}: {[sample.get(f'x_{i}_{t}', 0) for t in range(m + 1)]}")
+        print(f"Airspace {i}: {[int(sample.get(f'x_{i}_{t}', 0)) for t in range(m + 1)]}")
 else:
     print("No feasible solution found.")
