@@ -2,12 +2,16 @@ import cvxpy as cp
 import numpy as np
 
 # Parameters
-n = 3  # Number of airspace
-m = 10  # Number of time steps
-c = np.array([1 for _ in range(n)])  # Capacities c_i for i = 1 to n
+n = 10  # Number of airspace
+m = 30  # Number of time steps
+c = np.array([3 for _ in range(n)])  # Capacities c_i for i = 1 to n
 c[0] = 15
+c[1] = 5
+c[2] = 5
+c[3] = 5
+c[4] = 5
 u0 = np.array([0 for _ in range(m)])  # Aircraft entering at airspace x_0 for t = 0 to m-1
-u0[0] = 5
+u0[0] = 10
 
 # Decision variables (now integers)
 u = cp.Variable((n, m + 1), integer=True)

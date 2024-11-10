@@ -3,12 +3,16 @@ from dwave.system import LeapHybridCQMSampler
 import dimod
 
 # Parameters
-n = 3  # Number of airspaces
-m = 10  # Number of time steps
-c = np.array([1 for _ in range(n)])  # Capacities c_i for i = 1 to n
+n = 10  # Number of airspace
+m = 30  # Number of time steps
+c = np.array([3 for _ in range(n)])  # Capacities c_i for i = 1 to n
 c[0] = 15
+c[1] = 5
+c[2] = 5
+c[3] = 5
+c[4] = 5
 u0 = np.array([0 for _ in range(m)])  # Aircraft entering at airspace x_0 for t = 0 to m-1
-u0[0] = 5
+u0[0] = 10
 
 # Initialize the Constrained Quadratic Model (CQM)
 cqm = dimod.ConstrainedQuadraticModel()
@@ -60,6 +64,12 @@ feasible_sampleset = sampleset.filter(lambda row: row.is_feasible)
 if feasible_sampleset:
     sample = feasible_sampleset.first.sample
     print("Optimal solution found.")
+
+    # Calculate the optimized value of the objective function
+    objective_value = sum(int(sample.get(f'x_{i}_{t}', 0)) for i in range(n) for t in range(m + 1))
+    print(f"Optimized objective value (total number of aircraft): {objective_value}")
+
+    # Display the solution
     print("\nOptimal delay schedule u_i(t):")
     for i in range(n):
         print(f"Airspace {i}: {[int(sample.get(f'u_{i}_{t}', 0)) for t in range(m + 1)]}")
