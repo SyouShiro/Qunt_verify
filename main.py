@@ -10,7 +10,7 @@ c[0] = 15
 c[1] = 5
 c[2] = 5
 c[3] = 5
-c[4] = 5
+c[4] = 15
 u0 = np.array([0 for _ in range(m)])  # Aircraft entering at airspace x_0 for t = 0 to m-1
 u0[0] = 10
 
