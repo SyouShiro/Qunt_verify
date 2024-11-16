@@ -3,14 +3,14 @@ from dwave.system import LeapHybridCQMSampler
 import dimod
 
 # Parameters
-n = 10  # Number of airspaces
+n = 10  # Number of airspace
 m = 30  # Number of time steps
 
 # Define routes (each route is a list of airspace indices)
 routes = [
     [0, 1, 2, 3, 4],  # Route 1
     [5, 6, 7, 8, 9],  # Route 2
-    [1, 2, 4, 6, 8, 4],  # Route 3 (skips some airspaces)
+    [1, 2, 4, 6, 8, 4],  # Route 3 (skips some airspace)
 ]
 
 # Capacity of each airspace
