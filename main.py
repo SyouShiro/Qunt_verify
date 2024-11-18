@@ -1,133 +1,155 @@
 import numpy as np
+from dimod import ConstrainedQuadraticModel, Integer, quicksum
 from dwave.system import LeapHybridCQMSampler
-import dimod
+import time
 
 # Parameters
-n = 16  # Number of airspace
+n = 16  # Number of airspaces
 m = 30  # Number of time steps
 
 # Define routes (each route is a list of airspace indices)
 routes = [
     [0, 1, 2, 3, 4],  # Route 1
     [5, 6, 7, 8, 9],  # Route 2
-    [10, 11, 12, 13, 14, 15],  # Route 3 (skips some airspace)
+    [10, 11, 12, 13, 14, 15],  # Route 3
     [4, 3, 2, 1, 0],  # Route 4 (reverse)
 ]
 
 # Capacity of each airspace
 c = np.array([3 for _ in range(n)])  # Default capacities
-# Route 1
 c[0] = 15
-c[1] = 5
-c[2] = 5
-c[3] = 5
 c[4] = 15
-# Route 2
 c[5] = 15
-# Route 3
 c[10] = 15
-# Route 4
-c[4] = 15
 
 # Aircraft entering at the starting airspace of each route at each time step
 u0 = {route_idx: np.zeros(m) for route_idx in range(len(routes))}
-u0[0][0] += 10  # Example: Route 1 has 10 aircraft entering at time t=0
-u0[1][0] += 4  # Example: Route 2 has 4 aircraft entering at time t=0
-u0[2][0] += 1  # Example: Route 3 has 1 aircraft entering at time t=0
-u0[3][0] += 3  # Example: Route 4 has 3 aircraft entering at time t=0
+u0[0][0] += 6  # Route 1
+u0[1][0] += 4  # Route 2
+u0[2][0] += 1  # Route 3
+u0[3][0] += 3  # Route 4
 
-# Initialize the Constrained Quadratic Model (CQM)
-cqm = dimod.ConstrainedQuadraticModel()
+# Create the CQM
+cqm = ConstrainedQuadraticModel()
 
-# Define decision variables for each route
-u = {route_idx: [[dimod.Integer(f'u_{route_idx}_{i}_{t}', upper_bound=c[airspace])
-                  for t in range(m + 1)] for i, airspace in enumerate(route)]
-     for route_idx, route in enumerate(routes)}
+# Route-specific decision variables
+route_x = {route_idx: [[Integer(f'x_r{route_idx}_a{airspace_idx}_t{t}', lower_bound=0, upper_bound=c[airspace])
+                        for t in range(m + 1)]
+                       for airspace_idx, airspace in enumerate(route)]
+           for route_idx, route in enumerate(routes)}
 
-x = {route_idx: [[dimod.Integer(f'x_{route_idx}_{i}_{t}', upper_bound=c[airspace])
-                  for t in range(m + 1)] for i, airspace in enumerate(route)]
-     for route_idx, route in enumerate(routes)}
+route_u = {route_idx: [[Integer(f'u_r{route_idx}_a{airspace_idx}_t{t}', lower_bound=0, upper_bound=c[airspace])
+                        for t in range(m)]
+                       for airspace_idx, airspace in enumerate(route)]
+           for route_idx, route in enumerate(routes)}
 
-# Add constraints for each route
-# Add constraints for each route
+# Global variables
+global_x = [[Integer(f'x_g_a{i}_t{t}', lower_bound=0, upper_bound=c[i]) for t in range(m + 1)] for i in range(n)]
+global_u = [[Integer(f'u_g_a{i}_t{t}', lower_bound=0, upper_bound=c[i]) for t in range(m)] for i in range(n)]
+
+# Initialize route-specific x at t=0
+for route_idx, route in enumerate(routes):
+    for airspace_idx, airspace in enumerate(route):
+        if airspace_idx == 0:
+            cqm.add_constraint(route_x[route_idx][airspace_idx][0] == u0[route_idx][0],
+                               label=f'init_x_r{route_idx}_a{airspace_idx}')
+        else:
+            cqm.add_constraint(route_x[route_idx][airspace_idx][0] == 0,
+                               label=f'init_x_r{route_idx}_a{airspace_idx}')
+
+# Flow dynamics constraints
 for route_idx, route in enumerate(routes):
     for t in range(m):
-        for i, airspace in enumerate(route):
-            if i == 0:
-                # First airspace of the route
-                x_prev = u0[route_idx][t]
-                u_prev = 0
-            else:
-                # Flow from the previous airspace in the route
-                x_prev = x[route_idx][i - 1][t]
-                u_prev = u[route_idx][i - 1][t]
+        for airspace_idx, airspace in enumerate(route):
+            inflow = 0
+            if airspace_idx > 0:
+                inflow = route_x[route_idx][airspace_idx - 1][t] - route_u[route_idx][airspace_idx - 1][t]
 
-            # Dynamic constraint: number of aircraft in each airspace at the next time step
+            outflow = route_u[route_idx][airspace_idx][t]
+
+            # Flow dynamics constraint
             cqm.add_constraint(
-                (x[route_idx][i][t + 1] - x_prev - u[route_idx][i][t] + u_prev) == 0,
-                label=f"dynamics_constraint_route{route_idx}_airspace{i}_time{t}"
+                route_x[route_idx][airspace_idx][t + 1] -
+                route_x[route_idx][airspace_idx][t] - inflow + outflow == 0,
+                label=f'flow_dynamics_r{route_idx}_a{airspace_idx}_t{t}'
             )
 
-            # Capacity constraints
+            # Outflow cannot exceed current x
             cqm.add_constraint(
-                x[route_idx][i][t] <= c[airspace],
-                label=f"capacity_constraint_x_route{route_idx}_airspace{i}_time{t}"
-            )
-            cqm.add_constraint(
-                u[route_idx][i][t] <= c[airspace],
-                label=f"capacity_constraint_u_route{route_idx}_airspace{i}_time{t}"
+                route_x[route_idx][airspace_idx][t] - outflow >= 0,
+                label=f'outflow_limit_r{route_idx}_a{airspace_idx}_t{t}'
             )
 
-            # Stay constraints
-            cqm.add_constraint(
-                x[route_idx][i][t] - u[route_idx][i][t] >= 0,
-                label=f"stay_constraint_route{route_idx}_airspace{i}_time{t}"
-            )
+# Global x and u computation
+for t in range(m + 1):
+    for i in range(n):
+        cqm.add_constraint(
+            quicksum(route_x[route_idx][route.index(i)][t]
+                     for route_idx, route in enumerate(routes) if i in route) - global_x[i][t] == 0,
+            label=f'global_x_a{i}_t{t}'
+        )
 
-            # Non-negativity constraints
-            cqm.add_constraint(
-                u[route_idx][i][t] >= 0,
-                label=f"nonnegativity_u_route{route_idx}_airspace{i}_time{t}"
-            )
-            cqm.add_constraint(
-                x[route_idx][i][t] >= 0,
-                label=f"nonnegativity_x_route{route_idx}_airspace{i}_time{t}"
-            )
+for t in range(m):
+    for i in range(n):
+        cqm.add_constraint(
+            quicksum(route_u[route_idx][route.index(i)][t]
+                     for route_idx, route in enumerate(routes) if i in route)- global_u[i][t] == 0,
+            label=f'global_u_a{i}_t{t}'
+        )
 
+# Capacity constraints
+for t in range(m + 1):
+    for i in range(n):
+        cqm.add_constraint(global_x[i][t] <= c[i], label=f'capacity_x_a{i}_t{t}')
 
-# Objective function: Minimize the total number of aircraft in the system
-objective = sum(x[route_idx][i][t]
-                for route_idx in range(len(routes))
-                for i in range(len(routes[route_idx]))
-                for t in range(m + 1))
-cqm.set_objective(objective)
+# Objective function: Minimize total aircraft in the system
+cqm.set_objective(quicksum(global_x[i][t] for i in range(n) for t in range(m + 1)))
 
-# Solve the problem using D-Wave's hybrid CQM solver
+# Solve the CQM using D-Wave's hybrid solver
 sampler = LeapHybridCQMSampler()
-sampleset = sampler.sample_cqm(cqm, time_limit=20)
+start_time = time.time()
+print("Solving the problem...")
+sampleset = sampler.sample_cqm(cqm, time_limit=10)
+end_time = time.time()
+print(f"Optimization completed in {end_time - start_time:.2f} seconds")
 
-# Check if the solution is feasible
-feasible_sampleset = sampleset.filter(lambda row: row.is_feasible)
-if feasible_sampleset:
-    sample = feasible_sampleset.first.sample
-    print("Optimal solution found.")
+# Process the results
+feasible_samples = sampleset.filter(lambda row: row.is_feasible)
+if feasible_samples:
+    best_sample = feasible_samples.first.sample
+    print("Optimal solution found!")
 
-    # Calculate the optimized value of the objective function
-    objective_value = sum(int(sample.get(f'x_{route_idx}_{i}_{t}', 0))
-                          for route_idx in range(len(routes))
-                          for i in range(len(routes[route_idx]))
-                          for t in range(m + 1))
-    print(f"Optimized objective value (total number of aircraft): {objective_value}")
+    # Print the total aircraft in the system
+    total_aircraft = sum(best_sample[f'x_g_a{i}_t{t}'] for i in range(n) for t in range(m + 1))
+    print(f"Total aircraft in the system: {total_aircraft}")
 
-    # Display the solution
+    # Print route-specific x and u
     for route_idx, route in enumerate(routes):
         print(f"\nRoute {route_idx + 1}: {route}")
-        # print("Optimal delay schedule u_i(t):")
-        # for i, airspace in enumerate(route):
-        #     print(f"  Airspace {airspace}: {[int(sample.get(f'u_{route_idx}_{i}_{t}', 0)) for t in range(m + 1)]}")
+        print("Route-specific aircraft x_i(t):")
+        for airspace_idx, airspace in enumerate(route):
+            values = [best_sample[f'x_r{route_idx}_a{airspace_idx}_t{t}'] for t in range(m + 1)]
+            int_list = [int(item) for item in values]
+            print(f"  Airspace {airspace}: {int_list}")
 
-        print("Number of aircraft in each airspace x_i(t):")
-        for i, airspace in enumerate(route):
-            print(f"  Airspace {airspace}: {[int(sample.get(f'x_{route_idx}_{i}_{t}', 0)) for t in range(m + 1)]}")
+        print("Route-specific outflows u_i(t):")
+        for airspace_idx, airspace in enumerate(route):
+            values = [best_sample[f'u_r{route_idx}_a{airspace_idx}_t{t}'] for t in range(m)]
+            int_list = [int(item) for item in values]
+            print(f"  Airspace {airspace}: {int_list}")
+
+    # Print global x and u
+    print("\nGlobal aircraft x(t):")
+    for i in range(n):
+        values = [best_sample[f'x_g_a{i}_t{t}'] for t in range(m + 1)]
+        int_list = [int(item) for item in values]
+        print(f"  Airspace {i}: {int_list}")
+
+    print("\nGlobal outflows u(t):")
+    for i in range(n):
+        values = [best_sample[f'u_g_a{i}_t{t}'] for t in range(m)]
+        int_list = [int(item) for item in values]
+        print(f"  Airspace {i}: {int_list}")
+
 else:
     print("No feasible solution found.")

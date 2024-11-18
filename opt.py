@@ -16,11 +16,7 @@ routes = [
 
 # Capacity of each airspace
 c = np.array([3 for _ in range(n)])  # Default capacities
-# Custom capacities
 c[0] = 15
-# c[1] = 5
-# c[2] = 5
-# c[3] = 5
 c[4] = 15
 c[5] = 15
 c[10] = 15
