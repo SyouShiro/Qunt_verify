@@ -22,9 +22,9 @@ c[4] = 15
 
 # Aircraft entering at the starting airspace of each route at each time step
 u0 = {route_idx: np.zeros(m) for route_idx in range(len(routes))}
-u0[0][0] = 10  # Example: Route 1 has 10 aircraft entering at time t=0
-u0[1][0] = 3  # Example: Route 2 has 3 aircraft entering at time t=0
-u0[2][0] = 1  # Example: Route 3 has 1 aircraft entering at time t=0
+u0[0][0] += 10  # Example: Route 1 has 10 aircraft entering at time t=0
+u0[1][0] += 3  # Example: Route 2 has 3 aircraft entering at time t=0
+u0[2][0] += 1  # Example: Route 3 has 1 aircraft entering at time t=0
 
 # Decision variables
 u = {route_idx: cp.Variable((len(route), m + 1), integer=True) for route_idx, route in enumerate(routes)}
