@@ -11,6 +11,7 @@ routes = [
     [0, 1, 2, 3, 4],  # Route 1
     [5, 6, 7, 8, 9],  # Route 2
     [10, 11, 12, 13, 14, 15],  # Route 3 (skips some airspace)
+    [4, 3, 2, 1, 0],  # Route 4 (reverse)
 ]
 
 # Capacity of each airspace
@@ -25,12 +26,15 @@ c[4] = 15
 c[5] = 15
 # Route 3
 c[10] = 15
+# Route 4
+c[4] = 15
 
 # Aircraft entering at the starting airspace of each route at each time step
 u0 = {route_idx: np.zeros(m) for route_idx in range(len(routes))}
 u0[0][0] += 10  # Example: Route 1 has 10 aircraft entering at time t=0
 u0[1][0] += 4  # Example: Route 2 has 4 aircraft entering at time t=0
 u0[2][0] += 1  # Example: Route 3 has 1 aircraft entering at time t=0
+u0[3][0] += 3  # Example: Route 4 has 3 aircraft entering at time t=0
 
 # Initialize the Constrained Quadratic Model (CQM)
 cqm = dimod.ConstrainedQuadraticModel()
@@ -100,7 +104,7 @@ cqm.set_objective(objective)
 
 # Solve the problem using D-Wave's hybrid CQM solver
 sampler = LeapHybridCQMSampler()
-sampleset = sampler.sample_cqm(cqm, time_limit=5)
+sampleset = sampler.sample_cqm(cqm, time_limit=20)
 
 # Check if the solution is feasible
 feasible_sampleset = sampleset.filter(lambda row: row.is_feasible)
